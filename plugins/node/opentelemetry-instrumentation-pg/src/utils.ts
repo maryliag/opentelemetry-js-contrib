@@ -23,6 +23,7 @@ import {
   SpanKind,
   diag,
   UpDownCounter,
+  Attributes,
 } from '@opentelemetry/api';
 import { AttributeNames } from './enums/AttributeNames';
 import {
@@ -34,10 +35,14 @@ import {
   SEMATTRS_DB_USER,
   SEMATTRS_DB_STATEMENT,
   DBSYSTEMVALUES_POSTGRESQL,
+  ATTR_SERVER_PORT,
+  ATTR_SERVER_ADDRESS,
 } from '@opentelemetry/semantic-conventions';
 import {
   ATTR_DB_CLIENT_CONNECTION_POOL_NAME,
   ATTR_DB_CLIENT_CONNECTION_STATE,
+  ATTR_DB_OPERATION_NAME,
+  ATTR_DB_NAMESPACE,
   DB_CLIENT_CONNECTION_STATE_VALUE_USED,
   DB_CLIENT_CONNECTION_STATE_VALUE_IDLE,
 } from '@opentelemetry/semantic-conventions/incubating';
@@ -53,6 +58,39 @@ import { PgInstrumentationConfig } from './types';
 import type * as pgTypes from 'pg';
 import { safeExecuteInTheMiddle } from '@opentelemetry/instrumentation';
 import { SpanNames } from './enums/SpanNames';
+
+enum emitType {
+  NEW_SEM_CONV,
+  OLD_SEM_CONV,
+  BOTH_SEM_CONV,
+}
+
+function getEmitType(): emitType {
+  if (process.env.OTEL_SEMCONV_STABILITY_OPT_IN?.includes('database/dup')) {
+    return emitType.BOTH_SEM_CONV;
+  }
+  if (process.env.OTEL_SEMCONV_STABILITY_OPT_IN?.includes('database')) {
+    return emitType.NEW_SEM_CONV;
+  }
+  return emitType.OLD_SEM_CONV;
+}
+
+/**
+ *
+ * Either the name of a prepared statement; or an attempted parse
+ * of the SQL command, normalized to uppercase; or unknown.
+ * @param queryConfig
+ */
+function getOperationName(queryConfig?: {
+  text: string;
+  name?: unknown;
+}): string {
+  if (!queryConfig) return '';
+
+  return typeof queryConfig.name === 'string' && queryConfig.name
+    ? queryConfig.name
+    : parseNormalizedOperationName(queryConfig.text);
+}
 
 /**
  * Helper function to get a low cardinality span name from whatever info we have
@@ -82,13 +120,7 @@ export function getQuerySpanName(
   // dbName as being a prepared statement or sql commit name.
   if (!queryConfig) return SpanNames.QUERY_PREFIX;
 
-  // Either the name of a prepared statement; or an attempted parse
-  // of the SQL command, normalized to uppercase; or unknown.
-  const command =
-    typeof queryConfig.name === 'string' && queryConfig.name
-      ? queryConfig.name
-      : parseNormalizedOperationName(queryConfig.text);
-
+  const command = getOperationName(queryConfig);
   return `${SpanNames.QUERY_PREFIX}:${command}${dbName ? ` ${dbName}` : ''}`;
 }
 
@@ -125,27 +157,57 @@ function getPort(port: number | undefined): number | undefined {
 export function getSemanticAttributesFromConnection(
   params: PgParsedConnectionParams
 ) {
-  return {
+  let attr: Attributes = {
     [SEMATTRS_DB_SYSTEM]: DBSYSTEMVALUES_POSTGRESQL,
-    [SEMATTRS_DB_NAME]: params.database, // required
-    [SEMATTRS_DB_CONNECTION_STRING]: getConnectionString(params), // required
-    [SEMATTRS_NET_PEER_NAME]: params.host, // required
-    [SEMATTRS_NET_PEER_PORT]: getPort(params.port),
-    [SEMATTRS_DB_USER]: params.user,
   };
+  const emit = getEmitType();
+  if (emit === emitType.OLD_SEM_CONV || emit === emitType.BOTH_SEM_CONV) {
+    attr = {
+      ...attr,
+      [SEMATTRS_DB_NAME]: params.database,
+      [SEMATTRS_DB_CONNECTION_STRING]: getConnectionString(params),
+      [SEMATTRS_DB_USER]: params.user,
+      [SEMATTRS_NET_PEER_NAME]: params.host,
+      [SEMATTRS_NET_PEER_PORT]: getPort(params.port),
+    };
+  }
+  if (emit === emitType.NEW_SEM_CONV || emit === emitType.BOTH_SEM_CONV) {
+    attr = {
+      ...attr,
+      [ATTR_DB_NAMESPACE]: params.database,
+      [ATTR_SERVER_PORT]: getPort(params.port),
+      [ATTR_SERVER_ADDRESS]: params.host,
+    };
+  }
+  return attr;
 }
 
 export function getSemanticAttributesFromPool(params: PgPoolOptionsParams) {
-  return {
+  let attr: Attributes = {
     [SEMATTRS_DB_SYSTEM]: DBSYSTEMVALUES_POSTGRESQL,
-    [SEMATTRS_DB_NAME]: params.database, // required
-    [SEMATTRS_DB_CONNECTION_STRING]: getConnectionString(params), // required
-    [SEMATTRS_NET_PEER_NAME]: params.host, // required
-    [SEMATTRS_NET_PEER_PORT]: getPort(params.port),
-    [SEMATTRS_DB_USER]: params.user,
     [AttributeNames.IDLE_TIMEOUT_MILLIS]: params.idleTimeoutMillis,
     [AttributeNames.MAX_CLIENT]: params.maxClient,
   };
+  const emit = getEmitType();
+  if (emit === emitType.OLD_SEM_CONV || emit === emitType.BOTH_SEM_CONV) {
+    attr = {
+      ...attr,
+      [SEMATTRS_DB_NAME]: params.database,
+      [SEMATTRS_DB_CONNECTION_STRING]: getConnectionString(params),
+      [SEMATTRS_DB_USER]: params.user,
+      [SEMATTRS_NET_PEER_NAME]: params.host,
+      [SEMATTRS_NET_PEER_PORT]: getPort(params.port),
+    };
+  }
+  if (emit === emitType.NEW_SEM_CONV || emit === emitType.BOTH_SEM_CONV) {
+    attr = {
+      ...attr,
+      [ATTR_DB_NAMESPACE]: params.database,
+      [ATTR_SERVER_PORT]: getPort(params.port),
+      [ATTR_SERVER_ADDRESS]: params.host,
+    };
+  }
+  return attr;
 }
 
 export function shouldSkipInstrumentation(
@@ -180,9 +242,13 @@ export function handleConfigQuery(
   }
 
   // Set attributes
-  if (queryConfig.text) {
+  const emit = getEmitType();
+  // Query text is not sanitized, so it shouldn't be set for new semantic conventions,
+  // until a new config is created that allows unsanitized query texts to be used.
+  if (queryConfig.text && emit !== emitType.NEW_SEM_CONV) {
     span.setAttribute(SEMATTRS_DB_STATEMENT, queryConfig.text);
   }
+  span.setAttribute(ATTR_DB_OPERATION_NAME, getOperationName(queryConfig));
 
   if (
     instrumentationConfig.enhancedDatabaseReporting &&

@@ -52,8 +52,15 @@ import {
   SEMATTRS_DB_USER,
   DBSYSTEMVALUES_POSTGRESQL,
   ATTR_ERROR_TYPE,
+  ATTR_SERVER_PORT,
+  ATTR_SERVER_ADDRESS,
 } from '@opentelemetry/semantic-conventions';
+import {
+  ATTR_DB_OPERATION_NAME,
+  ATTR_DB_NAMESPACE,
+} from '@opentelemetry/semantic-conventions/incubating';
 import { addSqlCommenterComment } from '@opentelemetry/sql-common';
+import { after } from 'mocha';
 
 const memoryExporter = new InMemorySpanExporter();
 
@@ -74,6 +81,13 @@ const DEFAULT_ATTRIBUTES = {
   [SEMATTRS_DB_CONNECTION_STRING]: `postgresql://${CONFIG.host}:${CONFIG.port}/${CONFIG.database}`,
   [SEMATTRS_NET_PEER_PORT]: CONFIG.port,
   [SEMATTRS_DB_USER]: CONFIG.user,
+};
+
+const DEFAULT_ATTRIBUTES_SEMCONV_STABILITY_OPT_IN = {
+  [SEMATTRS_DB_SYSTEM]: DBSYSTEMVALUES_POSTGRESQL,
+  [ATTR_DB_NAMESPACE]: CONFIG.database,
+  [ATTR_SERVER_PORT]: CONFIG.port,
+  [ATTR_SERVER_ADDRESS]: CONFIG.host,
 };
 
 const unsetStatus: SpanStatus = {
@@ -357,6 +371,7 @@ describe('pg', () => {
       const attributes = {
         ...DEFAULT_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: 'SELECT NOW()',
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
       const events: TimedEvent[] = [];
       const span = tracer.startSpan('test span');
@@ -377,6 +392,7 @@ describe('pg', () => {
       const attributes = {
         ...DEFAULT_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: query,
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
       const events: TimedEvent[] = [];
       const span = tracer.startSpan('test span');
@@ -396,6 +412,7 @@ describe('pg', () => {
       const attributes = {
         ...DEFAULT_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: query,
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
       const events: TimedEvent[] = [];
       const span = tracer.startSpan('test span');
@@ -418,6 +435,7 @@ describe('pg', () => {
       const attributes = {
         ...DEFAULT_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: query,
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
       const events: TimedEvent[] = [];
       const span = tracer.startSpan('test span');
@@ -438,6 +456,7 @@ describe('pg', () => {
       const attributes = {
         ...DEFAULT_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: query,
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
       const events: TimedEvent[] = [];
       const span = tracer.startSpan('test span');
@@ -458,6 +477,7 @@ describe('pg', () => {
       const attributes = {
         ...DEFAULT_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: query,
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
       const events: TimedEvent[] = [];
       const span = tracer.startSpan('test span');
@@ -483,6 +503,7 @@ describe('pg', () => {
         ...DEFAULT_ATTRIBUTES,
         [AttributeNames.PG_PLAN]: name,
         [SEMATTRS_DB_STATEMENT]: query,
+        [ATTR_DB_OPERATION_NAME]: 'fetch-text',
       };
       const events: TimedEvent[] = [];
       const span = tracer.startSpan('test span');
@@ -507,6 +528,7 @@ describe('pg', () => {
       const attributes = {
         ...DEFAULT_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: query,
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
       const events: TimedEvent[] = [];
       const span = tracer.startSpan('test span');
@@ -518,6 +540,96 @@ describe('pg', () => {
         } catch (e: any) {
           assert.ok(false, e.message);
         }
+      });
+    });
+
+    describe('Check attributes based on environment variable OTEL_SEMCONV_STABILITY_OPT_IN', () => {
+      const envOptIn = process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
+      const query = 'SELECT NOW()';
+
+      after(function () {
+        process.env.OTEL_SEMCONV_STABILITY_OPT_IN = envOptIn;
+      });
+
+      it('span should have only old stable attributes when OTEL_SEMCONV_STABILITY_OPT_IN is not set', async () => {
+        process.env.OTEL_SEMCONV_STABILITY_OPT_IN = '';
+        const attributes = {
+          ...DEFAULT_ATTRIBUTES,
+          [SEMATTRS_DB_STATEMENT]: query,
+          [ATTR_DB_OPERATION_NAME]: 'SELECT',
+        };
+        const events: TimedEvent[] = [];
+        const span = tracer.startSpan('test span');
+        await context.with(trace.setSpan(context.active(), span), async () => {
+          try {
+            const resPromise = await client.query(query);
+            assert.ok(resPromise);
+            runCallbackTest(span, attributes, events);
+          } catch (e: any) {
+            assert.ok(false, e.message);
+          }
+        });
+      });
+
+      it('span should have only new stable attributes when OTEL_SEMCONV_STABILITY_OPT_IN is set to database', async () => {
+        process.env.OTEL_SEMCONV_STABILITY_OPT_IN = 'database';
+        const attributes = {
+          ...DEFAULT_ATTRIBUTES_SEMCONV_STABILITY_OPT_IN,
+          [ATTR_DB_OPERATION_NAME]: 'SELECT',
+        };
+        const events: TimedEvent[] = [];
+        const span = tracer.startSpan('test span');
+        await context.with(trace.setSpan(context.active(), span), async () => {
+          try {
+            const resPromise = await client.query(query);
+            assert.ok(resPromise);
+            runCallbackTest(span, attributes, events);
+          } catch (e: any) {
+            assert.ok(false, e.message);
+          }
+        });
+      });
+
+      it('span should have both old and new stable attributes when OTEL_SEMCONV_STABILITY_OPT_IN is set to database/dup', async () => {
+        process.env.OTEL_SEMCONV_STABILITY_OPT_IN = 'database/dup';
+        const attributes = {
+          ...DEFAULT_ATTRIBUTES,
+          ...DEFAULT_ATTRIBUTES_SEMCONV_STABILITY_OPT_IN,
+          [SEMATTRS_DB_STATEMENT]: query,
+          [ATTR_DB_OPERATION_NAME]: 'SELECT',
+        };
+        const events: TimedEvent[] = [];
+        const span = tracer.startSpan('test span');
+        await context.with(trace.setSpan(context.active(), span), async () => {
+          try {
+            const resPromise = await client.query(query);
+            assert.ok(resPromise);
+            runCallbackTest(span, attributes, events);
+          } catch (e: any) {
+            assert.ok(false, e.message);
+          }
+        });
+      });
+
+      it('span should have both old and new stable attributes when OTEL_SEMCONV_STABILITY_OPT_IN is set to database/dup and database', async () => {
+        process.env.OTEL_SEMCONV_STABILITY_OPT_IN = 'database/dup,database';
+        const attributes = {
+          ...DEFAULT_ATTRIBUTES,
+          ...DEFAULT_ATTRIBUTES_SEMCONV_STABILITY_OPT_IN,
+          [SEMATTRS_DB_STATEMENT]: query,
+          [ATTR_DB_OPERATION_NAME]: 'SELECT',
+        };
+        const events: TimedEvent[] = [];
+        const span = tracer.startSpan('test span');
+        await context.with(trace.setSpan(context.active(), span), async () => {
+          try {
+            const resPromise = await client.query(query);
+            assert.ok(resPromise);
+            runCallbackTest(span, attributes, events);
+          } catch (e: any) {
+            assert.ok(false, e.message);
+          }
+        });
       });
     });
 
@@ -546,6 +658,7 @@ describe('pg', () => {
       const attributes = {
         ...DEFAULT_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: query,
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
         [AttributeNames.PG_VALUES]: [
           'Hello,World',
           'abc',
@@ -585,6 +698,7 @@ describe('pg', () => {
       const attributes = {
         ...DEFAULT_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: query,
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
 
       // These are the attributes we expect on the span after the requestHook
@@ -678,6 +792,7 @@ describe('pg', () => {
         const attributes = {
           ...DEFAULT_ATTRIBUTES,
           [SEMATTRS_DB_STATEMENT]: query,
+          [ATTR_DB_OPERATION_NAME]: 'SELECT',
           [dataAttributeName]: '{"rowCount":1}',
         };
         beforeEach(async () => {
@@ -711,6 +826,7 @@ describe('pg', () => {
           const attributes = {
             ...DEFAULT_ATTRIBUTES,
             [SEMATTRS_DB_STATEMENT]: query,
+            [ATTR_DB_OPERATION_NAME]: 'SELECT',
             [dataAttributeName]: '{"rowCount":1}',
           };
 
@@ -736,6 +852,7 @@ describe('pg', () => {
         const attributes = {
           ...DEFAULT_ATTRIBUTES,
           [SEMATTRS_DB_STATEMENT]: query,
+          [ATTR_DB_OPERATION_NAME]: 'SELECT',
         };
 
         beforeEach(async () => {

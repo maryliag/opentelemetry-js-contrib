@@ -50,7 +50,10 @@ import {
   SEMATTRS_DB_USER,
   SEMATTRS_DB_STATEMENT,
 } from '@opentelemetry/semantic-conventions';
-import { ATTR_DB_CLIENT_CONNECTION_STATE } from '@opentelemetry/semantic-conventions/incubating';
+import {
+  ATTR_DB_CLIENT_CONNECTION_STATE,
+  ATTR_DB_OPERATION_NAME,
+} from '@opentelemetry/semantic-conventions/incubating';
 
 const memoryExporter = new InMemorySpanExporter();
 
@@ -187,6 +190,7 @@ describe('pg-pool', () => {
       const pgAttributes = {
         ...DEFAULT_PG_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: 'SELECT NOW()',
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
       const events: TimedEvent[] = [];
       const span = provider.getTracer('test-pg-pool').startSpan('test span');
@@ -219,6 +223,7 @@ describe('pg-pool', () => {
       const pgAttributes = {
         ...DEFAULT_PG_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: 'SELECT NOW()',
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
       const events: TimedEvent[] = [];
       const parentSpan = provider
@@ -292,6 +297,7 @@ describe('pg-pool', () => {
       const pgAttributes = {
         ...DEFAULT_PG_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: 'SELECT NOW()',
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
       const events: TimedEvent[] = [];
       const span = provider.getTracer('test-pg-pool').startSpan('test span');
@@ -311,6 +317,7 @@ describe('pg-pool', () => {
       const pgAttributes = {
         ...DEFAULT_PG_ATTRIBUTES,
         [SEMATTRS_DB_STATEMENT]: 'SELECT NOW()',
+        [ATTR_DB_OPERATION_NAME]: 'SELECT',
       };
       const events: TimedEvent[] = [];
       const parentSpan = provider
@@ -336,6 +343,8 @@ describe('pg-pool', () => {
       });
     });
 
+    // describe()
+
     describe('when specifying a responseHook configuration', () => {
       const dataAttributeName = 'pg_data';
       const query = 'SELECT 0::text';
@@ -348,6 +357,7 @@ describe('pg-pool', () => {
         const pgAttributes = {
           ...DEFAULT_PG_ATTRIBUTES,
           [SEMATTRS_DB_STATEMENT]: query,
+          [ATTR_DB_OPERATION_NAME]: 'SELECT',
           [dataAttributeName]: '{"rowCount":1}',
         };
 
@@ -430,6 +440,7 @@ describe('pg-pool', () => {
         const pgAttributes = {
           ...DEFAULT_PG_ATTRIBUTES,
           [SEMATTRS_DB_STATEMENT]: query,
+          [ATTR_DB_OPERATION_NAME]: 'SELECT',
         };
 
         beforeEach(async () => {
